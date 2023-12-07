@@ -1,0 +1,83 @@
+version: "3.7"
+services:
+  hydra:
+    image: oryd/hydra:v2.2.0-rc.3
+    ports:
+      - "4444:4444" # Public port
+      - "4445:4445" # Admin port
+      - "5555:5555" # Port for hydra token user
+    command: serve -c /etc/config/hydra.yml all --dev
+    volumes:
+      - type: bind
+        source: ./config/hydra.yml
+        target: /etc/config/hydra.yml
+    environment:
+      - DSN=postgres://hydra:secret@postgresd:5432/hydra?sslmode=disable&max_conns=20&max_idle_conns=4
+      - TRACING_PROVIDER=jaeger
+      - TRACING_PROVIDERS_JAEGER_SAMPLING_SERVER_URL=http://jaeger:5778/sampling
+      - TRACING_PROVIDERS_JAEGER_LOCAL_AGENT_ADDRESS=jaeger:6831
+      - TRACING_PROVIDERS_JAEGER_SAMPLING_TRACE_ID_RATIO=1
+      # JWT
+      - STRATEGIES_ACCESS_TOKEN=jwt
+      - OIDC_SUBJECT_IDENTIFIERS_SUPPORTED_TYPES=public
+      # CORS
+      - SERVE_PUBLIC_CORS_ENABLED=true
+      - SERVE_PUBLIC_CORS_ALLOWED_METHODS=POST,GET,PUT,DELETE
+      - SERVE_ADMIN_CORS_ENABLED=true
+      - SERVE_ADMIN_CORS_ALLOWED_METHODS=POST,GET,PUT,DELETE
+    restart: unless-stopped
+    depends_on:
+      - hydra-migrate
+      - jaeger
+    networks:
+      - intranet
+  hydra-migrate:
+    image: oryd/hydra:v2.2.0-rc.3
+    environment:
+      - DSN=postgres://hydra:secret@postgresd:5432/hydra?sslmode=disable&max_conns=20&max_idle_conns=4
+    command: migrate -c /etc/config/hydra.yml sql -e --yes
+    volumes:
+      - type: bind
+        source: ./config/hydra.yml
+        target: /etc/config/hydra.yml
+    restart: on-failure
+    networks:
+      - intranet
+  consent:
+    environment:
+      - HYDRA_ADMIN_URL=http://hydra:4445
+    image: oryd/hydra-login-consent-node:v2.2.0-rc.3
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - intranet
+  postgresd:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=hydra
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=hydra
+    networks:
+      - intranet
+  prometheus:
+    image: prom/prometheus:v2.12.0
+    ports:
+      - "9090:9090"
+    depends_on:
+      - hydra
+    command: --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./config/prometheus-config.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - intranet
+  jaeger:
+    image: jaegertracing/all-in-one:1.19.2
+    ports:
+      - "16686:16686" # The UI port
+    networks:
+      - intranet
+networks:
+  intranet:
